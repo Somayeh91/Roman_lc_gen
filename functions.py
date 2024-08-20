@@ -168,3 +168,16 @@ def fix_sampling (df, t_new, p):
     df_new = pd.DataFrame({'t': t_new, 'm': m_new , 'e': mu_err})
     
     return df_new
+
+def create_folded_lc(n_phases, df):
+	x = pd.concat([df.sort_values(by=['phase']).phase, 
+               df.sort_values(by=['phase']).phase+1,
+              df.sort_values(by=['phase']).phase+2])
+	y = pd.concat([df.sort_values(by=['phase']).m, 
+	               df.sort_values(by=['phase']).m,
+	              df.sort_values(by=['phase']).m])
+	e = pd.concat([df.sort_values(by=['phase']).e, 
+	               df.sort_values(by=['phase']).e,
+	              df.sort_values(by=['phase']).e])
+	return x,  y, e
+
