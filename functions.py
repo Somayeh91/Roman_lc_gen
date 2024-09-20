@@ -5,7 +5,7 @@ from scipy.interpolate import interp1d
 from george import kernels
 import george
 import scipy.optimize as op
-from gp_model_params import info
+from gp_model_params import *
 from astropy.io import fits
 from scipy import stats
 
@@ -32,28 +32,42 @@ def read_OGLE_lc (filename, p):
         
     return df_OGLE
 
-def read_fits (filename, tp = 'RRLYR'):
+def read_fits (path, period=None, tp = 'RRLYR', verbose=False):
     bands = ['LC_I', 'LC_V', 'LC_H', 'LC_K']
-    filedirec = 'lc_example/' + filename + '.fits'
+    filedirec = path
     hdul = fits.open(filedirec)
+    t = np.asarray([])
+    m = np.asarray([])
+    e = np.asarray([])
+    band = []
     for b in bands:
         try:
-            t = hdul[b].data['HJD']
-            m = hdul[b].data['mag']
-            e = hdul[b].data['mag_error']
+            t = np.concatenate((t, hdul[b].data['HJD']), axis=0)
+            m = np.concatenate((m, hdul[b].data['mag']), axis=0)
+            e = np.concatenate((e, hdul[b].data['mag_error']), axis=0)
+            band = band + [b.split('_')[1]]*len(hdul[b].data['HJD'])
         except:
-            print('No %s band was found.'%(b.split('_')[1]))
+            if verbose:
+                print('No %s band was found.'%(b.split('_')[1]))
             pass    
-    p_range = info[tp]['p_range']
     
-    phase, period = phase_refine(t, m, e, p_range) 
-    phase = T_0_fixer(t, m, p, phase)
+    if len(t)==0:
+        print('No data found. Exit!')
+        return np.nan, np.nan
+    if period is None:
+        p_range = info[tp]['p_range']
+        phase, period = phase_refine(t, m, e, p_range) 
+        phase = T_0_fixer(t, m, period, phase)
+    else: 
+        phase = (t/period)%1
+        phase = T_0_fixer(t, m, period, phase)
     
     
     df_OGLE = pd.DataFrame({'t': t-np.min(t), 
                             'm': m,
                             'e': e,
-                            'phase': phase})
+                            'phase': phase,
+                             'band': band})
     
     return period, df_OGLE
 
@@ -134,35 +148,35 @@ def gap_reducer(df, p):
     df_gapped = df.copy(deep=True)
 
     for ind in indxs:
-        if ind+1 >= len(df):
+        if ind+1 >= len(df_gapped):
             continue
         
-        gap = ((df.t[ind+1]-df.t[ind])/p)
+        gap = ((df_gapped.t[ind+1]-df_gapped.t[ind])/p)
         
         if gap<1:
             pass
         else:
-            coeff_diff = (((df.t[ind+1] - df.t[ind])/p) - 
-                         ((df.t[ind+1] -df.t[ind])/p)%1)
-            df.loc[df.index>ind, 't'] = df.t[ind+1:] - coeff_diff*p
+            coeff_diff = (((df_gapped.t[ind+1] - df_gapped.t[ind])/p) - 
+                         ((df_gapped.t[ind+1] -df_gapped.t[ind])/p)%1)
+            df_gapped.loc[df_gapped.index>ind, 't'] = df_gapped.t[ind+1:] - coeff_diff*p
 
 
-    df = df.reset_index().drop('index', axis =1)
+    df_gapped = df_gapped.reset_index().drop('index', axis =1)
     
-    df_temp = df.copy()
+    df_temp = df_gapped.copy()
     
-    df_temp.t = df_temp.t + ((df.t[len(df)-1]/p)- (df.t[len(df)-1]/p)%1)*p
+    df_temp.t = df_temp.t + ((df_gapped.t[len(df_gapped)-1]/p)- (df.t[len(df_gapped)-1]/p)%1)*p
     
-    df = pd.concat([df, df_temp]) #df.append(df_temp)
-    df = df[df.t < 1713]
+    df_gapped = pd.concat([df_gapped, df_temp]) #df.append(df_temp)
+    df_gapped = df_gapped[df_gapped.t < 1713]
 
-    df = df.sort_values(by=['t'])
+    df_gapped = df_gapped.sort_values(by=['t'])
     
     
-    df = df.reset_index().drop('index', axis =1)
+    df_gapped = df_gapped.reset_index().drop('index', axis =1)
     
 
-    return df
+    return df_gapped
 
 def fix_sampling (df, t_new, p):
     
@@ -248,7 +262,7 @@ def opt_gp(p0, gp, x, y, s =1):
                                 x, gp, s))
     gp.kernel.parameter_vector = results.x
 
-    return gp
+    return gp, nll(p0, y, x, gp, s)
 
 def T_0_fixer(t, m, p, phase):
     T0 = t[np.argmin(m)]
@@ -262,3 +276,81 @@ def T_0_fixer(t, m, p, phase):
         if phase[i]>1:
             phase[i]=phase[i]-1
     return np.asarray(phase)
+
+def prep_gp(info_, period, verbose=False):
+    kernel = info_['kernel']
+    p0 = info_['p0']
+    if np.isinf(info_['n_phs']):
+        p0[0] = info_['p0_period'](period)
+    else:
+        p0[0] = info_['p0_period'](info_['n_phs'])
+    if verbose:
+        print('Setting up the GP...')
+    gp = george.GP(kernel, solver= george.HODLRSolver)
+    gp.kernel.parameter_vector = p0
+    if verbose:
+        print('Successfully set up the GP.')
+    return gp
+
+def fit_gp(x, y, e, info_, gp, verbose=False):
+    p0 = gp.kernel.parameter_vector
+    fit_binned = info_['fit_binned']
+    y_median = np.median(y)
+    
+
+    if fit_binned:
+        if verbose:
+            print('Binning the data...')
+        x_fit, y_fit, e_fit = binning(x, y, e, bins = 4000)
+        y_fit = y_fit - y_median
+    else:
+        x_fit, y_fit, e_fit = x, y, e
+        y_fit = y_fit - y_median
+
+    # Pre-compute the factorization of the matrix.
+    gp.compute(x_fit, e_fit)
+    
+    if info_['gp_opt']:
+        gp, nll_opt = opt_gp(p0, gp, x_fit, y_fit, s =info_['gp_opt_s_param'])
+        # print(gp.kernel.parameter_vector)
+    else:
+        nll_opt = None
+    if verbose:
+        print('GP was successfully was computed.')
+    
+    return gp, x_fit, y_fit, nll_opt
+
+def predict_gp(gp, 
+               y_fit, 
+               y_median, 
+               t_prime,
+               t_new,
+               info_, 
+               period, 
+               noise_fun,
+               verbose=False):
+              
+    mu, cov = gp.predict(y_fit, t_prime)
+    std = np.sqrt(np.diag(cov))
+              
+    if verbose:
+        print('GP was successfully was applied to the new time baseline.')
+
+    if np.isinf(info_['n_phs']):
+        t_prime_new, mu_new = t_prime, mu
+    else:
+        t_prime_new, mu_new = create_X_from_n_periods(info_['n_phs'], 
+                                                      t_prime, 
+                                                      mu, 
+                                                      period, 
+                                                      np.max(t_new))
+    intpl = interp1d(t_prime_new, mu_new)
+    m_new = intpl(t_new)
+    mu_err = noise_fun(m_new+y_median)
+    df_Roman = pd.DataFrame({'t': t_new, 'm': m_new , 'e': mu_err})
+    if verbose:
+        print('Successfully created Roman lightcurve.')
+    
+    return df_Roman, t_prime_new, mu_new, mu, std
+
+    
