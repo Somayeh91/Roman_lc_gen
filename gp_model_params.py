@@ -120,5 +120,19 @@ info = {'LPV':{'kernel':kernels.CosineKernel(np.log(1))+
               'gp_opt_s_param': 1,
               'metric_threshold': 6e-6,
               'metric_threshold_std': 0.1
+             },
+        'CV':{'kernel':kernels.Product(kernels.ConstantKernel(-1.10), kernels.ExpSquaredKernel(-1.73)),
+              'p0':[-1.10, -1.73], 
+              'n_phs': 4,
+              'p_range': [100, 500],
+              'fit_binned': True,
+              'count_per_bins':100,
+              'gp_opt': True,
+              'p0_period': lambda x: np.log(x),
+              'example': 'OGLE-BLG-HB-0011',
+              'exp_period': 354.453,
+              'gp_opt_s_param': 1,
+              'metric_threshold': 6e-6,
+              'metric_threshold_std': 0.1
              }
         }

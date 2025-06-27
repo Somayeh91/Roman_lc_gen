@@ -567,6 +567,13 @@ def evaluate_fit(df_modified, tp, period, phases, metrics, info_, verbose=False)
     
 
 def find_valid_rows(matrix, threshold=0.01, threshold_std=0.01, level = 4):
+    # Handle empty matrix case early
+    if matrix.shape[0] == 0:
+        return np.array([], dtype=int)
+    print(len(matrix.shape))
+    # elif len(matrix.shape) == 1:
+    #     return np.array([], dtype=int)
+
     # Condition 1: All last four column values must be below the threshold
     valid_rows = np.all(matrix[:, 2:] < threshold, axis=1)
 
