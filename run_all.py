@@ -15,6 +15,7 @@ from glob import glob
 from tqdm import tqdm
 import pickle as pkl
 import argparse
+import sys
 
 
 from pathlib import Path
@@ -59,6 +60,12 @@ def parse_options():
 	parser.add_argument('-plot_lc', action='store',
 						default=True,
 						help='Do you want to plot the result and save it?')
+	parser.add_argument('-batching', action='store',
+						default=False,
+						help='Do you want to save the output file in batches?')
+	parser.add_argument('-batch_size', action='store',
+						default=100,
+						help='Number of lc saved in each batch.')
 
 	# Parses through the arguments and saves them within the keyword args
 	arguments = parser.parse_args()
@@ -82,6 +89,12 @@ direc = home + direc_lcs + '%s/'%tp
 direc_list = np.sort(glob(direc+'*.fits'))
 list_periods = np.genfromtxt(home + direc_lcs + '%s/BLG_%s_OGLE_periods.txt'%(tp,tp)
 							, dtype='str')
+batching = args.batching
+batch_size = args.batch_size
+if batching:
+	if number_lc<batch_size:
+		print ('Error: Batching is not possible if total number of lc is less than batch size.')
+		sys.exit()
 
 
 lists = direc_list #[71:72]
@@ -89,8 +102,10 @@ all_templates = {}
 counter = 0
 
 # Read time sampling of Roman Galactic Bulge Surevy. Set the start time to zero.
-Roman_sampling = np.loadtxt('lc_example/ulwdc1_208_W149.txt', usecols=0)
-Roman_sampling = Roman_sampling - min(Roman_sampling)
+# Roman_sampling = np.loadtxt('lc_example/ulwdc1_208_W149.txt', usecols=0)
+Roman_sampling = np.load('lc_example/roman_times_shortcadence.npy')
+Roman_sampling_min = min(Roman_sampling)
+Roman_sampling = Roman_sampling - Roman_sampling_min
 
 
 
@@ -168,11 +183,11 @@ for j, path in tqdm(enumerate(lists)):
 			phases =[n_phs_original]
 			best_phs = np.inf
 			if len(find_valid_rows(np.array([metrics]), 
-                   threshold=info[tp]['metric_threshold'],
-                   threshold_std=info[tp]['metric_threshold_std']),
+				   threshold=info[tp]['metric_threshold'],
+				   threshold_std=info[tp]['metric_threshold_std']),
 				   level = 3)==0:
-			flags[i] = 1
-        	print('at least one metric value did not pass the threshold, removed light curve.')
+				flags[i] = 1
+				print('at least one metric value did not pass the threshold, removed light curve.')
 			
 
 		if np.isnan(best_phs):
@@ -209,7 +224,8 @@ for j, path in tqdm(enumerate(lists)):
 		
 		all_templates[ID]['%s_band_m_observation'%band] = df.m.values
 		all_templates[ID]['%s_band_time_bservation'%band] = df.t.values
-		all_templates[ID]['%s_band_Roman_m_official_sampling'%band] = (df_roman.m).values + y_median
+		all_templates[ID]['%s_band_Roman_m_official_sampling_short'%band] = (df_roman['m_short']) + y_median
+		all_templates[ID]['%s_band_Roman_m_official_sampling_long'%band] = (df_roman['m_long']) + y_median
 		if add_regular_lc:
 			all_templates[ID]['%s_band_Roman_m_regular_sampling'%band] = gp_y_regular_final + y_median
 			all_templates[ID]['%s_band_Roman_time_regular_sampling'%band] = time_sampling_regular_final
@@ -254,29 +270,48 @@ for j, path in tqdm(enumerate(lists)):
 									  data, 
 									  y_median,
 									  regular_sampling_fit,
-			   						  gp_y_regular_fit, 
-			   						  period,
-			   						  metrics_all_bands[i, :])
+									  gp_y_regular_fit, 
+									  period,
+									  metrics_all_bands[i, :])
 			fig.savefig(output_direc+'plots/%s/%s_Roman_lc_%s_%s_band.png' %(tp, tp, ID, band))
 
 	
+	
+	if batching:
+		if (counter/batch_size)%1==0:
+			batch_number = int(counter/batch_size)
+			if save_output:
+				if all_bands:
+					filename = '%s_Roman_lc_batch_%i_size_%i_all_bands.pkl' %(tp, batch_number, counter)
+					if add_regular_lc:
+						filename = '%s_Roman_lc_batch_%i_size_%i_all_bands_includes_regular.pkl' %(tp, batch_number, counter)
+				else:
+					if add_regular_lc:
+						filename = '%s_Roman_lc_batch_%i_size_%i_includes_regular.pkl' %(tp, batch_number, counter)
+					else:
+						filename = '%s_Roman_lc_batch_%i_size_%i.pkl' %(tp, batch_number, counter)
+
+				pkl.dump(all_templates, 
+						 open(output_direc+filename,
+							  'wb'))
 	if counter == number_lc:
 		break
 		
 		
 IDs = list(all_templates.keys())
-if save_output:
-	if all_bands:
-		filename = '%s_Roman_lc_%i_all_bands.pkl' %(tp, counter)
-		if add_regular_lc:
-			filename = '%s_Roman_lc_%i_all_bands_includes_regular.pkl' %(tp, counter)
-	else:
-		if add_regular_lc:
-			filename = '%s_Roman_lc_%i_includes_regular.pkl' %(tp, counter)
+if not batching:
+	if save_output:
+		if all_bands:
+			filename = '%s_Roman_lc_%i_all_bands.pkl' %(tp, counter)
+			if add_regular_lc:
+				filename = '%s_Roman_lc_%i_all_bands_includes_regular.pkl' %(tp, counter)
 		else:
-			filename = '%s_Roman_lc_%i.pkl' %(tp, counter)
+			if add_regular_lc:
+				filename = '%s_Roman_lc_%i_includes_regular.pkl' %(tp, counter)
+			else:
+				filename = '%s_Roman_lc_%i.pkl' %(tp, counter)
 
-	pkl.dump(all_templates, 
-			 open(output_direc+filename,
-				  'wb'))
+		pkl.dump(all_templates, 
+				 open(output_direc+filename,
+					  'wb'))
 

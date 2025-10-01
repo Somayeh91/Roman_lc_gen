@@ -35,9 +35,12 @@ def read_fits (path, period=None, tp = 'RRLYR', verbose=False):
         print('No data found. Exit!')
         return np.nan, np.nan
     if period is None:
-        p_range = info[tp]['p_range']
-        phase, period = phase_refine(t, m, e, p_range) 
-        phase = T_0_fixer(t, m, period, phase)
+        if not tp in ['DN', 'CV', 'FL']:
+            p_range = info[tp]['p_range']
+            phase, period = phase_refine(t, m, e, p_range) 
+            phase = T_0_fixer(t, m, period, phase)
+        else:
+            phase = t
     else: 
         phase = (t/period)%1
         phase = T_0_fixer(t, m, period, phase)
@@ -186,7 +189,7 @@ def create_regular_final_time_from_regular_fit(regular_sampling_fit,
     tuple: (regular_sampling_final, gp_y_regular_final), where both are numpy arrays
            containing the extended time samples and corresponding function values.
     """
-    n = info_['n_phs']  # Number of phase points per period
+    n = info_['n_phs']  # Number of phases
     total_periods = int(((t_max / period) - (t_max / period) % 1) + 1)  # Compute total required periods
     
     
@@ -465,7 +468,8 @@ def predict_gp(gp,
                y_binned, 
                y_median, 
                regular_sampling_fit,
-               Roman_sampling,
+               Roman_sampling_short,
+               Roman_sampling_long,
                info_, 
                period,
                t_max, 
@@ -488,9 +492,12 @@ def predict_gp(gp,
 
     intpl = interp1d(regular_sampling_final, gp_y_regular_final)
 
-    y_interpolated_Roman = intpl(Roman_sampling)
-    df_Roman = pd.DataFrame({'t': Roman_sampling, 
-                             'm': y_interpolated_Roman})
+    y_interpolated_Roman_short = intpl(Roman_sampling_short)
+    y_interpolated_Roman_long = intpl(Roman_sampling_long)
+    df_Roman = {'t_short': Roman_sampling_short,
+                 't_long': Roman_sampling_long, 
+                 'm_short': y_interpolated_Roman_short,
+                 'm_long': y_interpolated_Roman_long}
     if verbose:
         print('Successfully created Roman lightcurve.')
 
@@ -514,7 +521,7 @@ def evaluate_fit(df_modified, tp, period, phases, metrics, info_, verbose=False)
         info[tp]['n_phs'] = phs
         if verbose:
             print('Testing number of phases = %i'%phs)
-        (df_roman, time_sampling_regular_final, gp_y_regular_final, regular_sampling_fit, gp_y_regular_fit, gp_std_regular_fit, gp_y_binned_fit, y_median, metrics, data) = run_all(df_modified, tp, period, info_, verbose=False)
+        (df_roman, time_sampling_regular_final, gp_y_regular_final, gp_std_regular_final, regular_sampling_fit, gp_y_regular_fit, gp_std_regular_fit, gp_y_binned_fit, y_median, metrics, data) = run_all(df_modified, tp, period, info_, verbose=False)
     
         metrics_tmp[i,0] = phs
         metrics_tmp[i,1:] = metrics
@@ -526,6 +533,11 @@ def evaluate_fit(df_modified, tp, period, phases, metrics, info_, verbose=False)
                                    threshold_std=info_['metric_threshold_std'])
 
     if len(selected_ind) == 0:
+        # selected_ind = find_valid_rows(metrics_tmp[:,1:], 
+        #                            threshold=info_['metric_threshold'],
+        #                            threshold_std=info_['metric_threshold_std'],
+        #                            level=3)
+        # if len(selected_ind) == 0:
         if verbose:
                 print('at least one metric value did not pass the threshold, removed light curve.')
         return np.nan
@@ -603,17 +615,21 @@ def find_valid_rows(matrix, threshold=0.01, threshold_std=0.01, level = 4):
 def run_all(df_modified, tp, period, info_, verbose=False):
     
     # Read Roman time sampling
-    Roman_sampling = np.loadtxt('lc_example/ulwdc1_208_W149.txt', usecols=0)
-    Roman_sampling = Roman_sampling - min(Roman_sampling)
-    Roman_max_time = max(Roman_sampling)
-    max_time_regular = 2000
+    Roman_sampling_short = np.load('lc_example/roman_times_shortcadence.npy')
+    Roman_sampling_long = np.load('lc_example/roman_times_longcadence.npy')
+    Roman_sampling_short_min = min(Roman_sampling_short)
+    Roman_sampling_short = Roman_sampling_short - Roman_sampling_short_min
+    Roman_sampling_long_min = min(Roman_sampling_long)
+    Roman_sampling_long = Roman_sampling_long - Roman_sampling_long_min
+    Roman_max_short_time = max(Roman_sampling_short)
+    max_time_regular = 2000 # One of the produced resampled light curves will have a baseline of 2000 days.
     
     # Read and apply Roman noise function
     # noise_fun = noise_function('cycle6_snr_curve.txt')
     
     gp = prep_gp(info_, period)
     # x, y, e are either the full lc or an intrval of n phases of them conducted by repeating a folded phase n times
-    x, y, e = prep_input(df_modified, tp, period, info_, Roman_max_time)
+    x, y, e = prep_input(df_modified, tp, period, info_, Roman_max_short_time)
 
 
     if not np.isinf(info_['n_phs']):
@@ -668,7 +684,8 @@ def run_all(df_modified, tp, period, info_, verbose=False):
                                         y_binned, 
                                         y_median, 
                                         regular_sampling_fit, 
-                                        Roman_sampling, 
+                                        Roman_sampling_short,
+                                        Roman_sampling_long, 
                                         info[tp], 
                                         period,
                                         max_time_regular

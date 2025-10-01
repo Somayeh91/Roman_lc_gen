@@ -106,7 +106,7 @@ info = {'LPV':{'kernel':kernels.CosineKernel(np.log(1))+
                  'exp_period': 0.2865322,
                  'gp_opt_s_param': 1,
                  'metric_threshold': 0.02,
-                 'metric_threshold_std': 0.01},
+                 'metric_threshold_std': 0.02},
         'HB':{'kernel':kernels.CosineKernel(np.log(1))+kernels.Matern32Kernel(.15),
               'p0':[1, .15], 
               'n_phs': 4,
