@@ -87,7 +87,10 @@ plot_lc = args.plot_lc
 
 direc = home + direc_lcs + '%s/'%tp
 direc_list = np.sort(glob(direc+'*.fits'))
-list_periods = np.genfromtxt(home + direc_lcs + '%s/BLG_%s_OGLE_periods.txt'%(tp,tp)
+if tp in ['CV', 'DN']:
+	pass
+else:
+	list_periods = np.genfromtxt(home + direc_lcs + '%s/BLG_%s_OGLE_periods.txt'%(tp,tp)
 							, dtype='str')
 batching = args.batching
 batch_size = args.batch_size
@@ -129,7 +132,10 @@ for j, path in tqdm(enumerate(lists)):
 
 	
 	print(ID)
-	period = float(list_periods[list_periods[:, 0] == ID][0][1])
+	if not tp in ['CV', 'DN']:
+		period = float(list_periods[list_periods[:, 0] == ID][0][1])
+	else:
+		period = np.nan
 	
 	period, df_ = read_fits(path, period=period,
 						   tp = tp)
@@ -182,12 +188,15 @@ for j, path in tqdm(enumerate(lists)):
 		else:
 			phases =[n_phs_original]
 			best_phs = np.inf
-			if len(find_valid_rows(np.array([metrics]), 
-				   threshold=info[tp]['metric_threshold'],
-				   threshold_std=info[tp]['metric_threshold_std']),
-				   level = 3)==0:
-				flags[i] = 1
-				print('at least one metric value did not pass the threshold, removed light curve.')
+			if tp in ['CV', 'DN']:
+				pass
+			else:
+				if len(find_valid_rows(np.array([metrics]), 
+					   threshold=info[tp]['metric_threshold'],
+					   threshold_std=info[tp]['metric_threshold_std'],
+					   level = 3))==0:
+					flags[i] = 1
+					print('at least one metric value did not pass the threshold, removed light curve.')
 			
 
 		if np.isnan(best_phs):
@@ -265,8 +274,8 @@ for j, path in tqdm(enumerate(lists)):
 				continue
 
 		if plot_lc:
-			fig = example_plot_output(all_templates[ID]['%s_band_Roman_time_regular_sampling'%band], 
-									  all_templates[ID]['%s_band_Roman_m_regular_sampling'%band], 
+			fig = example_plot_output(Roman_sampling, 
+									  (df_roman['m_short']) + y_median, 
 									  data, 
 									  y_median,
 									  regular_sampling_fit,
@@ -282,18 +291,19 @@ for j, path in tqdm(enumerate(lists)):
 			batch_number = int(counter/batch_size)
 			if save_output:
 				if all_bands:
-					filename = '%s_Roman_lc_batch_%i_size_%i_all_bands.pkl' %(tp, batch_number, counter)
+					filename = '%s_Roman_lc_batch_%i_size_%i_all_bands.pkl' %(tp, batch_number, batch_size)
 					if add_regular_lc:
-						filename = '%s_Roman_lc_batch_%i_size_%i_all_bands_includes_regular.pkl' %(tp, batch_number, counter)
+						filename = '%s_Roman_lc_batch_%i_size_%i_all_bands_includes_regular.pkl' %(tp, batch_number, batch_size)
 				else:
 					if add_regular_lc:
-						filename = '%s_Roman_lc_batch_%i_size_%i_includes_regular.pkl' %(tp, batch_number, counter)
+						filename = '%s_Roman_lc_batch_%i_size_%i_includes_regular.pkl' %(tp, batch_number, batch_size)
 					else:
-						filename = '%s_Roman_lc_batch_%i_size_%i.pkl' %(tp, batch_number, counter)
+						filename = '%s_Roman_lc_batch_%i_size_%i.pkl' %(tp, batch_number, batch_size)
 
 				pkl.dump(all_templates, 
 						 open(output_direc+filename,
 							  'wb'))
+				all_templates = {}
 	if counter == number_lc:
 		break
 		

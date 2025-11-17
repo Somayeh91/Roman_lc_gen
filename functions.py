@@ -10,6 +10,7 @@ from astropy.io import fits
 from scipy import stats
 import matplotlib.pyplot as plt
 
+Roman_sampling_short_max_time = 981.99
 
 
 def read_fits (path, period=None, tp = 'RRLYR', verbose=False):
@@ -42,8 +43,11 @@ def read_fits (path, period=None, tp = 'RRLYR', verbose=False):
         else:
             phase = t
     else: 
-        phase = (t/period)%1
-        phase = T_0_fixer(t, m, period, phase)
+        if not np.isnan(period):
+            phase = (t/period)%1
+            phase = T_0_fixer(t, m, period, phase)
+        else:
+            phase = t
         
     if np.min(t)>0:
         t_prime = t-np.min(t)
@@ -77,11 +81,11 @@ def phase_refine(t, m, e, p_range):
     return phase, p
 
 def add_last_point(df, p):
-    last_point_t = float(1713.99)
-    last_point_m = df.m[np.argmin(np.abs(((df.t/p)%1).values-((1713.99/p)%1)))]
-    last_point_e = df.e[np.argmin(np.abs(((df.t/p)%1).values-((1713.99/p)%1)))]
-    last_point_phase = df.phase[np.argmin(np.abs(((df.t/p)%1).values-((1713.99/p)%1)))]
-    last_point_band = df.band[np.argmin(np.abs(((df.t/p)%1).values-((1713.99/p)%1)))]
+    last_point_t = float(Roman_sampling_short_max_time + .99)
+    last_point_m = df.m[np.argmin(np.abs(((df.t/p)%1).values-((Roman_sampling_short_max_time + .99/p)%1)))]
+    last_point_e = df.e[np.argmin(np.abs(((df.t/p)%1).values-((Roman_sampling_short_max_time + .99/p)%1)))]
+    last_point_phase = df.phase[np.argmin(np.abs(((df.t/p)%1).values-((Roman_sampling_short_max_time + .99/p)%1)))]
+    last_point_band = df.band[np.argmin(np.abs(((df.t/p)%1).values-((Roman_sampling_short_max_time + .99/p)%1)))]
 
     df = pd.concat((df, pd.DataFrame(data=np.asarray([float(last_point_t),
                                       float(last_point_m),
@@ -153,21 +157,59 @@ def prep_input(df, tp, p, info_, t_max):
 def prep_for_fit(df, period, info_):
     if np.min(df.t)>0:
         df.t = df.t - np.min(df.t)
+
+    if not np.isnan(info_['p0_period']):
     
-    if (np.max(df.t))<1713:
-        df = add_last_point(df, period)
-    df_modified = gap_reducer(df, period, info_)
-    if (np.max(df_modified.t))<1713 and np.isinf(info_['n_phs']):
-        df_modified = extend_baseline(df_modified, period)
-    while np.max(df_modified.t.values)<1713+period:
-        len_0 = np.diff(df_modified.t.values)
-        df_modified = gap_reducer(df_modified, period, info_)
-        len_1 = np.diff(df_modified.t.values)
-        if np.max(df_modified.t.values)>1713:
-            break
-        if np.sum(len_0>50) == np.sum(len_1>50):
-            break
+        if (np.max(df.t))<Roman_sampling_short_max_time:
+            df = add_last_point(df, period)
+        df_modified = gap_reducer(df, period, info_)
+        if (np.max(df_modified.t))<Roman_sampling_short_max_time and np.isinf(info_['n_phs']):
+            df_modified = extend_baseline(df_modified, period)
+        while np.max(df_modified.t.values)<Roman_sampling_short_max_time+period:
+            len_0 = np.diff(df_modified.t.values)
+            df_modified = gap_reducer(df_modified, period, info_)
+            len_1 = np.diff(df_modified.t.values)
+            if np.max(df_modified.t.values)>Roman_sampling_short_max_time:
+                break
+            if np.sum(len_0>50) == np.sum(len_1>50):
+                break
+    else:
+        t_min = np.min(np.diff(df.t.values))
+        inds = np.where(np.diff(df.t.values)>50)[0]
+        for i, ind in enumerate(inds):
+            time_gap = df.t[ind+1]-df.t[ind]+t_min
+            df.loc[df.index[ind+1]:, 't'] -= time_gap
+        n_lc = int(max(df.t)//Roman_sampling_short_max_time)
+        df_modified = df
     return df_modified
+
+def best_window_irregular(t, y, width=981.0):
+    """
+    t: 1D increasing array of times in days (float or int)
+    y: 1D array of values, same length as t
+    width: window length in days
+    Returns: start_idx, end_idx (inclusive), start_time, end_time, best_mean
+    """
+    t = np.asarray(t)
+    y = np.asarray(y)
+
+    best_mean = -np.inf
+    best_i = best_j = 0
+
+    # for each start i, find the largest j with t[j] <= t[i] + width
+    for i in range(len(t)):
+        t_max = t[i]+width+5
+        if t_max>max(t)-1:
+            return best_i, best_j, float(t[best_i]), float(t[best_j]), float(best_mean)
+        else:
+            j = np.argmin(np.abs(t-t_max))+1
+            m = np.mean(y[i:j])
+            if m > best_mean:
+                best_mean = m
+                best_i, best_j = i, j
+
+    return best_i, best_j, float(t[best_i]), float(t[best_j]), float(best_mean)
+
 
 def create_regular_final_time_from_regular_fit(regular_sampling_fit, 
                                                gp_y_regular_fit, 
@@ -190,23 +232,39 @@ def create_regular_final_time_from_regular_fit(regular_sampling_fit,
            containing the extended time samples and corresponding function values.
     """
     n = info_['n_phs']  # Number of phases
-    total_periods = int(((t_max / period) - (t_max / period) % 1) + 1)  # Compute total required periods
+    if not np.isnan(period):
+        total_periods = int(((t_max / period) - (t_max / period) % 1) + 1)  # Compute total required periods
+    else:
+        total_periods = np.nan
     
     
     # If the maximum value in regular_sampling_fit exceeds t_max, truncate the data
     if max(regular_sampling_fit) > t_max:
-        closest_idx = np.argmin(np.abs(regular_sampling_fit - t_max))
-        max_tmp = regular_sampling_fit[min(closest_idx + 1, len(regular_sampling_fit) - 1)]
+        if np.isnan(total_periods):
+            start_idx, end_idx, start_day, end_day, best_mean = best_window_irregular(regular_sampling_fit, -1*gp_y_regular_fit, width=t_max)
+            gp_y_regular_final = gp_y_regular_fit[start_idx: end_idx]
+            gp_std_regular_final = gp_std_regular_fit[start_idx: end_idx]
+            regular_sampling_final = regular_sampling_fit[start_idx: end_idx]
+        else:
 
-        gp_y_regular_final = gp_y_regular_fit[regular_sampling_fit <= max_tmp]
-        gp_std_regular_final = gp_std_regular_fit[regular_sampling_fit <= max_tmp]
-        regular_sampling_final = regular_sampling_fit[regular_sampling_fit <= max_tmp]
+            closest_idx = np.argmin(np.abs(regular_sampling_fit - t_max))
+            max_tmp = regular_sampling_fit[min(closest_idx + 1, len(regular_sampling_fit) - 1)]
+
+            gp_y_regular_final = gp_y_regular_fit[regular_sampling_fit <= max_tmp]
+            gp_std_regular_final = gp_std_regular_fit[regular_sampling_fit <= max_tmp]
+            regular_sampling_final = regular_sampling_fit[regular_sampling_fit <= max_tmp]
     else:
-        num_x_n = int(total_periods / n - total_periods / n % 1 + 1)  # Number of repetitions needed
+        if np.isnan(total_periods):
+            num_x_n = 2
+        else:
+            num_x_n = int(total_periods / n - total_periods / n % 1 + 1)  # Number of repetitions needed
         
         # Handle the case where n is infinite (extend only twice)
         if np.isinf(n):
-            t_last_ph = ((np.max(regular_sampling_fit)/period) - (np.max(regular_sampling_fit)/period)%1)*period
+            if np.isnan(total_periods):
+                t_last_ph = max(regular_sampling_fit)
+            else:
+                t_last_ph = ((np.max(regular_sampling_fit)/period) - (np.max(regular_sampling_fit)/period)%1)*period
             needed_len = (t_max-t_last_ph)
             extra_regular_sampling_fit = regular_sampling_fit[regular_sampling_fit<needed_len]+t_last_ph
             exra_gp_y_regular_fit = gp_y_regular_fit[regular_sampling_fit<needed_len]
@@ -272,7 +330,7 @@ def gap_reducer(df, p, info_, th=100):
             coeff_diff = (((df_gapped.t[ind+1] - df_gapped.t[ind])/p) - 
                          ((df_gapped.t[ind+1] -df_gapped.t[ind])/p)%1)
             df_gapped.loc[df_gapped.index>ind, 't'] = df_gapped.t[ind+1:] - coeff_diff*p
-            # if np.max(df_gapped.t)<1713:
+            # if np.max(df_gapped.t)<Roman_sampling_short_max_time:
 
 
 
@@ -408,7 +466,10 @@ def prep_gp(info_, period, verbose=False):
     kernel = info_['kernel']
     p0 = info_['p0']
     if np.isinf(info_['n_phs']):
-        p0[0] = info_['p0_period'](period)
+        if np.isnan(period):
+            pass
+        else:
+            p0[0] = info_['p0_period'](period)
     else:
         p0[0] = info_['p0_period'](period)
     if verbose:
@@ -490,14 +551,21 @@ def predict_gp(gp,
                                                                                                                   period, 
                                                                                                                   t_max)
 
-    intpl = interp1d(regular_sampling_final, gp_y_regular_final)
+    start_idx, end_idx, start_day, end_day, best_mean = best_window_irregular(regular_sampling_final, -1*gp_y_regular_final, width=Roman_sampling_short_max_time)
+    # x_roman_regular_tmp = regular_sampling_final[start_idx: end_idx]
+    # y_roman_regular_tmp = gp_y_regular_final[start_idx: end_idx]
+    # x_roman_regular_tmp = x_roman_regular_tmp - min(x_roman_regular_tmp)
+    # intpl = interp1d(x_roman_regular_tmp, y_roman_regular_tmp)
 
-    y_interpolated_Roman_short = intpl(Roman_sampling_short)
-    y_interpolated_Roman_long = intpl(Roman_sampling_long)
+    # y_interpolated_Roman_short = intpl(Roman_sampling_short)
+    # y_interpolated_Roman_long = intpl(Roman_sampling_long)
+    y_Roman_short, cov_roman = gp.predict(y_binned, Roman_sampling_short+start_day)
+    y_Roman_long, cov_roman = gp.predict(y_binned, Roman_sampling_long+start_day)
+
     df_Roman = {'t_short': Roman_sampling_short,
                  't_long': Roman_sampling_long, 
-                 'm_short': y_interpolated_Roman_short,
-                 'm_long': y_interpolated_Roman_long}
+                 'm_short': y_Roman_short,
+                 'm_long': y_Roman_long}
     if verbose:
         print('Successfully created Roman lightcurve.')
 
@@ -582,7 +650,7 @@ def find_valid_rows(matrix, threshold=0.01, threshold_std=0.01, level = 4):
     # Handle empty matrix case early
     if matrix.shape[0] == 0:
         return np.array([], dtype=int)
-    print(len(matrix.shape))
+    # print(len(matrix.shape))
     # elif len(matrix.shape) == 1:
     #     return np.array([], dtype=int)
 
@@ -666,9 +734,15 @@ def run_all(df_modified, tp, period, info_, verbose=False):
                                                                           info_, 
                                                                           n_bins=np.nan)
     
-        
+
+    
+
+    x_binned = x_binned[~np.isnan(e_binned)]
+    y_binned = y_binned[~np.isnan(e_binned)]
+    e_binned = e_binned[~np.isnan(e_binned)]
 
     gp = fit_gp(x_binned, y_binned, e_binned, info_, gp)
+
     
     
 
@@ -691,6 +765,7 @@ def run_all(df_modified, tp, period, info_, verbose=False):
                                         max_time_regular
                                         )
 
+    print('max of fitted gp is '+str(min(gp_y_regular_fit)))
     gp_y_binned_fit, cov_tmp = gp.predict(y_binned, x_binned)
     metrics = get_metrics(x_binned, gp_y_binned_fit, regular_sampling_fit, gp_y_regular_fit, y_binned) #np.nansum((y_binned-(gp_y_binned_fit))**2)/len(y_binned)
 
@@ -718,63 +793,95 @@ def run_all(df_modified, tp, period, info_, verbose=False):
     
 
 def example_plot_output(roman_x, roman_y, data, y_median, x_fit_regular, y_fit_regular, period, metrics):
-    fig, axs = plt.subplots(2, 2)
+    if not np.isnan(period):
+        fig, axs = plt.subplots(2, 2)
+        axs[0,0].scatter(data['x_binned'], data['y_binned']+y_median,color='b', label='observation')
+        axs[0,0].plot(x_fit_regular, y_fit_regular+y_median,color='orange', label = 'GP fit on regular sampling')
+        axs[0,0].plot(data['x_binned'], data['gp_y_binned']+y_median,color='red', label = 'GP fit on observation sampling')
+        axs[0,0].text(0.05, 
+                      0.05,
+                      'std_all=%.2f,'
+                      ' l2_bin_reg=%.9f,'
+                      ' l2_bin=%.9f,'%(metrics[0], 
+                                           metrics[1], 
+                                           metrics[2]), 
+                      transform = axs[0,0].transAxes)
+        axs[0,0].text(0.05, 
+                      0.1,
+                      'l2_bin_part1=%.9f,'
+                      ' l2_bin_part2=%.9f'
+                      ' l2_bin_part2=%.9f'%(metrics[3],
+                                            metrics[4], 
+                                            metrics[4]),
+                      transform = axs[0,0].transAxes)
 
+        axs[1,0].scatter(roman_x, roman_y,color='b', label='Roman simulated')
 
+        axs[0,1].scatter((data['x_binned']/period)%1, data['y_binned']+y_median,color='b', label='observation')
+        axs[0,1].plot((x_fit_regular/period)%1, y_fit_regular+y_median,color='orange', marker='o', linestyle='', markersize=3, label = 'GP fit on regular sampling')
+        axs[0,1].plot((data['x_binned']/period)%1, data['gp_y_binned']+y_median,color='red', marker='o', linestyle='', markersize=3, label = 'GP fit on observation sampling')
 
+        axs[1,1].scatter((roman_x/period)%1, roman_y,color='b', label='Roman simulated')
+        axs[1,1].plot((x_fit_regular/period)%1, y_fit_regular+y_median,color='orange', marker='o', linestyle='', markersize=3, label = 'GP fit on regular sampling')
 
-    axs[0,0].scatter(data['x_binned'], data['y_binned']+y_median,color='b', label='observation')
-    axs[0,0].plot(x_fit_regular, y_fit_regular+y_median,color='orange', label = 'GP fit on regular sampling')
-    axs[0,0].plot(data['x_binned'], data['gp_y_binned']+y_median,color='red', label = 'GP fit on observation sampling')
-    axs[0,0].text(0.05, 
-                  0.05,
-                  'std_all=%.2f,'
-                  ' l2_bin_reg=%.9f,'
-                  ' l2_bin=%.9f,'%(metrics[0], 
-                                       metrics[1], 
-                                       metrics[2]), 
-                  transform = axs[0,0].transAxes)
-    axs[0,0].text(0.05, 
-                  0.1,
-                  'l2_bin_part1=%.9f,'
-                  ' l2_bin_part2=%.9f'
-                  ' l2_bin_part2=%.9f'%(metrics[3],
-                                        metrics[4], 
-                                        metrics[4]),
-                  transform = axs[0,0].transAxes)
-
-    axs[1,0].scatter(roman_x, roman_y,color='b', label='Roman simulated')
-
-    axs[0,1].scatter((data['x_binned']/period)%1, data['y_binned']+y_median,color='b', label='observation')
-    axs[0,1].plot((x_fit_regular/period)%1, y_fit_regular+y_median,color='orange', marker='o', linestyle='', markersize=3, label = 'GP fit on regular sampling')
-    axs[0,1].plot((data['x_binned']/period)%1, data['gp_y_binned']+y_median,color='red', marker='o', linestyle='', markersize=3, label = 'GP fit on observation sampling')
-
-    axs[1,1].scatter((roman_x/period)%1, roman_y,color='b', label='Roman simulated')
-    axs[1,1].plot((x_fit_regular/period)%1, y_fit_regular+y_median,color='orange', marker='o', linestyle='', markersize=3, label = 'GP fit on regular sampling')
-
-    axs[0,0].legend(loc='upper right')
-    axs[0,1].legend(loc='upper right')
-    axs[1,1].legend(loc='upper right')
-    axs[1,0].legend(loc='upper right'
-        )
+        axs[0,0].legend(loc='upper right')
+        axs[0,1].legend(loc='upper right')
+        axs[1,1].legend(loc='upper right')
+        axs[1,0].legend(loc='upper right'
+            )
 
 
 
 
 
-    axs[0,0].invert_yaxis()
-    axs[0,1].invert_yaxis()
-    axs[1,1].invert_yaxis()
-    axs[1,0].invert_yaxis()
+        axs[0,0].invert_yaxis()
+        axs[0,1].invert_yaxis()
+        axs[1,1].invert_yaxis()
+        axs[1,0].invert_yaxis()
 
-    axs[0,0].set_ylabel('Magnitude')
-    axs[1,0].set_ylabel('Magnitude')
+        axs[0,0].set_ylabel('Magnitude')
+        axs[1,0].set_ylabel('Magnitude')
 
-    axs[1,0].set_xlabel('Time (days)')
-    axs[1,1].set_xlabel('Phase')
+        axs[1,0].set_xlabel('Time (days)')
+        axs[1,1].set_xlabel('Phase')
 
-    axs[0,0].set_title('Full light curves')
-    axs[0,1].set_title('Phase-folded light curves')
+        axs[0,0].set_title('Full light curves')
+        axs[0,1].set_title('Phase-folded light curves')
+    else:
+        fig, axs = plt.subplots(1, 2)
+        axs[0].scatter(data['x_binned'], data['y_binned']+y_median,color='b', label='observation')
+        axs[0].plot(x_fit_regular, y_fit_regular+y_median,color='orange', label = 'GP fit on regular sampling')
+        axs[0].plot(data['x_binned'], data['gp_y_binned']+y_median,color='red', label = 'GP fit on observation sampling')
+        axs[0].text(0.05, 
+                      0.05,
+                      'std_all=%.2f,'
+                      ' l2_bin_reg=%.9f,'
+                      ' l2_bin=%.9f,'%(metrics[0], 
+                                           metrics[1], 
+                                           metrics[2]), 
+                      transform = axs[0].transAxes)
+        axs[0].text(0.05, 
+                      0.1,
+                      'l2_bin_part1=%.9f,'
+                      ' l2_bin_part2=%.9f'
+                      ' l2_bin_part2=%.9f'%(metrics[3],
+                                            metrics[4], 
+                                            metrics[4]),
+                      transform = axs[0].transAxes)
+
+        axs[1].scatter(roman_x, roman_y,color='b', label='Roman simulated')
+        axs[0].legend(loc='upper right')
+        axs[1].legend(loc='upper right')
+        axs[0].invert_yaxis()
+        axs[1].invert_yaxis()
+        axs[0].set_ylabel('Magnitude')
+        axs[0].set_xlabel('Time (days)')
+        axs[1].set_xlabel('Time (days)')
+
+
+
+
+    
 
 
 
