@@ -148,5 +148,19 @@ info = {'LPV':{'kernel':kernels.CosineKernel(np.log(1))+
               'gp_opt_s_param': 2,
               'metric_threshold': 0,
               'metric_threshold_std': 0
+             },
+        'Be':{'kernel':kernels.Product(kernels.ConstantKernel(2.0), kernels.Matern32Kernel(5.0)),
+              'p0':[2.0, 5.0], 
+              'n_phs': np.inf,
+              'p_range': [100, 500],
+              'fit_binned': False,
+              'count_per_bins':100,
+              'gp_opt': True,
+              'p0_period': np.nan,
+              'example': 'OGLE-BLG-HB-0011',
+              'exp_period': 354.453,
+              'gp_opt_s_param': 2,
+              'metric_threshold': 0,
+              'metric_threshold_std': 0
              }
         }
