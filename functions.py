@@ -9,6 +9,9 @@ from gp_model_params import *
 from astropy.io import fits
 from scipy import stats
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+from scipy.signal import find_peaks
+
 
 Roman_sampling_short_max_time = 981.99
 
@@ -345,7 +348,7 @@ def best_window_irregular(t, y, width=981.0):
             return best_i, best_j, float(t[best_i]), float(t[best_j]), float(best_mean)
         else:
             j = np.argmin(np.abs(t-t_max))+1
-            m = np.mean(y[i:j])
+            m = np.nanmean(y[i:j])
             if m > best_mean:
                 best_mean = m
                 best_i, best_j = i, j
@@ -494,7 +497,7 @@ def stats_binning(x, y, e, bins=100):
     for k in range(len(bin_edges)-1):
         ind_bin = (x>bin_edges[k]) & (x<bin_edges[k+1])
         bin_middles.append(bin_edges[k] + r ) 
-        bin_errors.append(np.median(e[ind_bin])/50)
+        bin_errors.append(np.nanmedian(e[ind_bin]))
 
     bin_middles = np.asarray(bin_middles)
     bin_errors = np.asarray(bin_errors)
@@ -799,8 +802,20 @@ def opt_gp(p0, gp, x, y, s=1):
     - Optimizes only first two kernel parameters
     - Updates gp.kernel.parameter_vector with optimized values
     """
-    results = op.minimize(nll, [p0[0], p0[1]],
-                          args=(y, x, gp, s))
+
+    p0 = gp.get_parameter_vector()
+    bounds = gp.get_parameter_bounds()   # george provides sensible bounds
+    
+    results = minimize(
+        neg_log_like,
+        p0,
+        args=(y, x, gp, s),
+        jac=grad_neg_log_like,
+        method="L-BFGS-B",
+        bounds=bounds,
+    )
+    # results = op.minimize(nll, [p0[0], p0[1]],
+    #                       args=(y, x, gp, s))
     gp.kernel.parameter_vector = results.x
 
     return gp
@@ -1606,3 +1621,156 @@ def l2_distance(x1, y1, x2, y2):
     l2_dist = np.sqrt(np.sum((y1_interp - y2_interp) ** 2) * (common_x[1] - common_x[0]))
 
     return l2_dist
+
+def generate_flare(gp, y,  t_flare):
+    mean, cov = gp.predict(y, t_flare)
+    return mean
+
+def sin_model(t, A, omega, phi, C):
+	    return A * np.sin(omega * t + phi) + C
+
+
+
+def sin_fit(df):
+
+	
+
+	t = df.t.values
+	m = df.m.values
+
+	A_guess = (np.max(m) - np.min(m)) / 2
+	C_guess = np.median(m)
+
+	# Rough frequency guess (you can refine this later)
+	omega_guess = 2 * np.pi / 3  # assume ~10 time units period
+
+	phi_guess = 0
+
+	p0 = [A_guess, omega_guess, phi_guess, C_guess]
+
+
+	params, cov = curve_fit(sin_model, t, m, p0=p0)
+
+	A, omega, phi, C = params
+
+	return params
+
+def neg_log_like(params, y, x, gp, s):
+    gp.set_parameter_vector(params)
+    ll = gp.log_likelihood(y, quiet=True)
+    return -ll if np.isfinite(ll) else 1e25
+
+def grad_neg_log_like(params, y, x, gp, s):
+    gp.set_parameter_vector(params)
+    return -gp.grad_log_likelihood(y, quiet=True)
+
+def rot_var_gp_fit(t, m, e, n_bins = 100):
+
+    mask = np.isfinite(t) & np.isfinite(m) & np.isfinite(e)
+    t, m, e = t[mask], m[mask], e[mask]
+    
+    t_data, m_data, m_err = stats_binning(t-min(t), m, e, bins=n_bins)
+
+    t_data = t_data[~np.isnan(m_data)]
+    m_err = m_err[~np.isnan(m_data)]
+    m_data = m_data[~np.isnan(m_data)]
+
+    s = 0
+    
+    # ── 2. Kernel: squared-exponential amplitude × ExpSine² (periodic) ────────────
+    # george's ExpSine2Kernel: k(r) = exp(-Γ · sin²(π r / P))
+    #   - log_period  → log(P)
+    #   - gamma       → Γ (sharpness; larger = sharper, more sine-like)
+    # Multiply by a ConstantKernel to set the amplitude.
+
+    period_init, _, _ = lomb_scargle_period(t_data, m_data, m_err)
+    
+    amplitude   = (np.max(m_data) - np.min(m_data)) / 2
+    period_init = period_init     # your initial period guess
+    gamma_init  = 1.0     # sharpness
+    
+    k_periodic = amplitude**2 * kernels.ExpSine2Kernel(
+        gamma=gamma_init,
+        log_period=np.log(period_init)
+    )
+    kernel = k_periodic + kernels.ConstantKernel(1e-6, ndim=1)
+    
+    gp = george.GP(kernel, mean=np.median(m_data))
+    gp.compute(t_data, m_err)
+
+    
+    p0 = gp.get_parameter_vector()
+    bounds = gp.get_parameter_bounds()   # george provides sensible bounds
+    
+    p0 = gp.get_parameter_vector()
+    bounds = gp.get_parameter_bounds()   # george provides sensible bounds
+    
+    result = minimize(
+        neg_log_like,
+        p0,
+        args=(m_data, t_data, gp, s),
+        jac=grad_neg_log_like,
+        method="L-BFGS-B",
+        bounds=bounds,
+    )
+    
+    gp.set_parameter_vector(result.x)
+    # fitted_period = np.exp(gp.get_parameter("kernel:k2:log_period"))
+
+    return gp, [m_data, t_data, m_err]
+
+def flare_fit(x, y, e, info_copy, period):
+    gp = prep_gp(info_copy, period)
+
+    gp = fit_gp(-1*np.log10(x+0.001), y, e, info_copy, gp)
+
+    yfit = gp.predict(y, -1*np.log10(x+0.001))[0]
+
+    x_new = np.linspace(0, max(x), 100)
+    gp_y_binned_fit2, cov_tmp2 = gp.predict(y, -1*np.log10(x_new+0.001))
+
+    return {
+        "gp": gp,
+        "xfit": -1*np.log10(x+0.001),
+        "yfit": yfit,
+        "x": x,        # original flare time grid
+        "y": y,
+        "x_new":x_new,
+        "y_new":gp_y_binned_fit2
+    }
+
+def lomb_scargle_period(t, m, e, min_period=0.5, max_period=500, top_n=5):
+    """
+    Quick Lomb-Scargle period estimation.
+    
+    Parameters
+    ----------
+    t, m, e   : array-like  time, magnitude, uncertainty
+    min_period: float       minimum period to search (days)
+    max_period: float       maximum period to search (days)
+    top_n     : int         number of top peaks to print
+    
+    Returns
+    -------
+    period_ls : float       best-fit period (days)
+    frequency : ndarray     frequency array
+    power     : ndarray     LS power array
+    """
+    
+
+    frequency, power = LombScargle(t, m, e).autopower(
+        minimum_frequency=1 / max_period,
+        maximum_frequency=1 / min_period,
+    )
+
+    best_freq = frequency[np.argmax(power)]
+    period_ls = 1 / best_freq
+
+    fap = LombScargle(t, m, e).false_alarm_probability(power.max())
+
+    peaks, _ = find_peaks(power, height=np.percentile(power, 95))
+    top_peaks = sorted(peaks, key=lambda i: power[i], reverse=True)[:top_n]
+
+
+    return period_ls, frequency, power
+    

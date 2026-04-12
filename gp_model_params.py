@@ -162,5 +162,19 @@ info = {'LPV':{'kernel':kernels.CosineKernel(np.log(1))+
               'gp_opt_s_param': 2,
               'metric_threshold': 0,
               'metric_threshold_std': 0
+             },
+        'Flares_TESS':{'kernel':kernels.Product(kernels.ConstantKernel(3.0), kernels.Matern32Kernel(1)),
+              'p0':[3, 2], 
+              'n_phs': np.inf,
+              'p_range': [100, 500],
+              'fit_binned': False,
+              'count_per_bins':100,
+              'gp_opt': True,
+              'p0_period': np.nan,
+              'example': 'OGLE-BLG-HB-0011',
+              'exp_period': 354.453,
+              'gp_opt_s_param': 3,
+              'metric_threshold': 0,
+              'metric_threshold_std': 0
              }
         }
