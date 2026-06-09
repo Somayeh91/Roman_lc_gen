@@ -57,7 +57,7 @@ with open(output_file + 'flare_gp_fit_bank.pkl', 'rb') as file:
 
 band = 'TESS'
 
-num_lc = 2000
+num_lc = 200
 batch_size = 100
 
 make_flat = ['117874959',
@@ -108,6 +108,8 @@ for i in tqdm(range(num_lc)):
 	y_sim_regular = y_base_regular.copy()
 	
 	flare_times = np.random.choice(t_base, size=n_flares)
+	counter1 = 0
+	counter2 = 0
 	
 	for j, flare_ind in enumerate(flare_inds):
 		# print(flare_ind)
@@ -145,15 +147,17 @@ for i in tqdm(range(num_lc)):
 
 		mask_long = (t_base_long > t0 - tmin_flare) & (t_base_long < t0 + tmax_flare)
 		if np.sum(mask_long)!=0:
+			counter1 += 1
 			t_local_long = t_base_long[mask_long] - t_base_long[mask_long].min() + tmin_flare
 			flare_mag_long = interp_y1(t_local_long)
 			y_sim_long[mask_long] += flare_mag_long-max(flare_mag_long)
 
 		mask_long2 = (t_base_long2 > t0 - tmin_flare) & (t_base_long2 < t0 + tmax_flare)
 		if np.sum(mask_long2)!=0:
+			counter2 += 1
 			t_local_long2 = t_base_long2[mask_long2] - t_base_long2[mask_long2].min() + tmin_flare
 			flare_mag_long2 = interp_y1(t_local_long2)
-			y_sim_long[mask_long2] += flare_mag_long2-max(flare_mag_long2)
+			y_sim_long2[mask_long2] += flare_mag_long2-max(flare_mag_long2)
 
 
 
@@ -163,6 +167,10 @@ for i in tqdm(range(num_lc)):
 	plt.scatter(t_base_long2, y_sim_long2)
 	# plt.scatter(t_regular, y_sim_regular)
 	plt.gca().invert_yaxis()
+	if counter1>0:
+		plt.text(0.1, 0.1, 'n_peaks in long_cad_1 is %i'%counter1, transform=plt.gca().transAxes)
+	if counter2>0:
+		plt.text(0.1, 0.2, 'n_peaks in long_cad_2 is %i'%counter2, transform=plt.gca().transAxes)
 	plt.xlabel('Time (days)')
 	plt.ylabel('Magnitude')
 	plt.xlim(700, 800)
@@ -179,7 +187,7 @@ for i in tqdm(range(num_lc)):
 	all_lc[ID]['%s_band_Roman_m_regular_sampling'%band] = y_sim_regular
 	all_lc[ID]['%s_band_Roman_time_regular_sampling'%band] = t_regular
 
-	counter += 1
+	
 
 
 	if (counter/batch_size)%1==0:
