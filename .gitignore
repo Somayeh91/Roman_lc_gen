@@ -1,4 +1,5 @@
 node_modules/
+.gif
 build/
 npm-debug.log
 .env
