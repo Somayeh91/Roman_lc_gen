@@ -106,6 +106,35 @@ def read_fits(path, period=None, tp='RRLYR', verbose=False):
 	return period, df_OGLE
 
 
+def generate_points(length, min_gap=200, max_gap=250, seed=None):
+    rng = np.random.default_rng(seed)
+
+    # Use the smallest number of intervals that can satisfy max_gap
+    n_intervals = int(np.ceil(length / max_gap))
+
+    # Start with equal spacing
+    gaps = np.full(n_intervals, length / n_intervals)
+
+    # Random perturbation
+    margin = min(
+        gaps[0] - min_gap,
+        max_gap - gaps[0]
+    )
+
+    perturb = rng.uniform(-margin, margin, n_intervals)
+    perturb -= perturb.mean()
+
+    gaps += perturb
+
+    # Ensure exact total length
+    gaps[-1] += length - gaps.sum()
+
+    points = np.concatenate([[0], np.cumsum(gaps)])
+    points = np.round(points).astype(int)
+    points[-1] = length
+
+    return points
+
 def phase_refine(t, m, e, p_range):
 	"""
 	Estimate period and compute phases using Lomb-Scargle periodogram.

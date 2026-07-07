@@ -159,7 +159,7 @@ info = {'LPV':{'kernel':kernels.CosineKernel(np.log(1))+
               'p0_period': np.nan,
               'example': 'OGLE-BLG-HB-0011',
               'exp_period': 354.453,
-              'gp_opt_s_param': 2,
+              'gp_opt_s_param': 1.5,
               'metric_threshold': 0,
               'metric_threshold_std': 0
              },
