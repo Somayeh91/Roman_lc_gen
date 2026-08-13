@@ -1,5 +1,7 @@
 node_modules/
 .gif
+scripts/
+output/
 build/
 npm-debug.log
 .env
