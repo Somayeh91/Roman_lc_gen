@@ -28,7 +28,7 @@ import warnings
 
 from pathlib import Path
 home = str(Path.home())
-tp = 'CV'
+tp = 'DN'
 direc = home+'/Research_data/Bulge_Variables/%s/'%tp
 output_plot = 'output/plots/%s/'%tp
 output_file = 'output/'
@@ -43,6 +43,8 @@ batch_size = 100
 all_peaks = {}
 
 counter = 0
+
+time_offset = 1
 
 for i in tqdm(range(len(direc_list))):
 
@@ -163,9 +165,9 @@ for i in tqdm(range(len(direc_list))):
 																			  info[tp], 
 																			  n_bins=np.nan)
 	else:
-		if len(x)>1500:
+		if len(x)>100:
 			info[tp]['fit_binned'] = True
-			tot_ideal_len = 1500
+			tot_ideal_len = 50
 			x_binned, y_binned, e_binned, regular_sampling_fit = binning_data(x, 
 																			  y, 
 																			  e, 
@@ -201,7 +203,7 @@ for i in tqdm(range(len(direc_list))):
 
 	# plt.figure()
 	# plt.scatter(x_binned, 
-    #         y_sim)
+	#         y_sim)
 
 	# # plt.xlim(140, 160)
 
@@ -239,13 +241,15 @@ for i in tqdm(range(len(direc_list))):
 		if w>100:
 			print("width is too big.")
 			continue
-		if j != len(t_peaks)-1:
-			if (np.abs(t_peak - t_peaks[j+1])<5) and (np.abs(w-widths[j+1])<0.1):
-				print("Repeated peak=%0.1f, width=%.2f." %(t_peak, w))
-				continue
+		# if j != len(t_peaks)-1:
+		# 	if (np.abs(t_peak - t_peaks[j+1])<5) and (np.abs(w-widths[j+1])<0.1):
+		# 		print("Repeated peak=%0.1f, width=%.2f." %(t_peak, w))
+		# 		continue
 		insert_time = t_peak
-		dt = w*1.5
-		ind_peak = (x_binned > t_peak - dt) & (x_binned < t_peak + dt)
+		dt_right     = w * 2
+		dt_left    = w * 0.8
+		dt = 1.5 * w
+		ind_peak = (x_binned > t_peak - dt_left) & (x_binned < t_peak + dt_right)
 		t = x_binned[ind_peak]
 
 		if len(t)==0:
@@ -265,25 +269,20 @@ for i in tqdm(range(len(direc_list))):
 			continue
 		
 		gp = prep_gp(info[tp], period)
-		gp = fit_gp(-1*np.log10((t-min(t))+0.001), m, e, info[tp], gp)
+		gp = fit_gp(np.log10((t-min(t))+time_offset), m, e, info[tp], gp)
 		x_new = np.linspace(0, max(t)-min(t), int(dt*10))
-		y_regular = gp.predict(m, -1*np.log10(x_new+0.001), return_var=True)[0]
+		y_regular = gp.predict(m, np.log10(x_new+time_offset), return_var=True)[0]
 
 		if len(y_regular) == 0 or not np.any(np.isfinite(y_regular)):
 			print("GP prediction returned empty or non-finite array. Skipping peak.")
 			continue
 
-		threshold_mag = -0.001 #np.percentile(y_binned, 10)
-		baseline_mag = 0 #np.percentile(y_regular, 50) # your quiescent magnitude
+		threshold_mag = -0.001
+		baseline_mag = 0
 		y_regular_tmp = y_regular.copy()
 		mask = (y_regular > threshold_mag)
-		
-		y_regular_tmp[mask] = np.ones_like(y_regular_tmp[mask]) * baseline_mag #+ np.random.normal(0, 0.001, size=len(y_sim[mask]))
-		
-		# y_regular_tmp = y_regular_tmp - np.median(y_regular_tmp)
-		
-		
-		
+		y_regular_tmp[mask] = np.ones_like(y_regular_tmp[mask]) * baseline_mag
+
 		if len(y_regular_tmp) == 0 or np.max(y_regular_tmp) < -0.1:
 			print("Fit not accepted.")
 			continue
@@ -299,9 +298,9 @@ for i in tqdm(range(len(direc_list))):
 
 		all_peaks[ID].append({
 								"gp": gp,
-								"xfit": -1*np.log10((t-min(t))+0.001),
+								"xfit": np.log10((t-min(t))+time_offset),
 								"yfit": m,
-								"x": t,        # original flare time grid
+								"x": t,
 								"y": m,
 								"x_new":x_new,
 								"y_new":y_regular_tmp,
@@ -310,13 +309,10 @@ for i in tqdm(range(len(direc_list))):
 								})
 		peak_counter += 1
 
-
 		plt.figure()
-		plt.scatter(t-min(t), 
-					m)
+		plt.scatter(t-min(t), m)
 		plt.plot(x_new, y_regular_tmp, 'r')
 		plt.text(0.05, 0.2, "min=%0.1f, std=%0.3f"%(np.max(y_regular_tmp), np.std(y_regular_tmp)), transform=plt.gca().transAxes)
-		
 		plt.gca().invert_yaxis()
 		plt.savefig(output_plot + '_' + ID + '_%i.png'%peak_counter)
 

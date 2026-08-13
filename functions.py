@@ -2019,7 +2019,7 @@ def find_robust_peaks(x, y, smooth_scale=None, min_prominence=0.1,
 
 
 def multiscale_peaks(x, y, scales=[0.1, 0.5, 2, 5, 15], min_scales=2,
-					  merge_window=None, **kwargs):
+					  merge_window=None, min_peak_separation=20, **kwargs):
 	"""
 	Detect robust peaks by finding consensus across multiple smoothing scales.
 
@@ -2046,6 +2046,10 @@ def multiscale_peaks(x, y, scales=[0.1, 0.5, 2, 5, 15], min_scales=2,
 		Maximum distance in `x` units within which two detections are
 		considered the same peak and merged into one cluster. Defaults to
 		``max(scales)`` when None.
+	min_peak_separation : float, optional
+		Minimum allowed separation between returned peaks, in `x` units.
+		When candidates are closer than this, the candidate whose nearest
+		observed data point has the highest `y` value is retained. Default: 20.
 	**kwargs
 		Additional keyword arguments forwarded to `find_robust_peaks`.
 
@@ -2057,11 +2061,14 @@ def multiscale_peaks(x, y, scales=[0.1, 0.5, 2, 5, 15], min_scales=2,
 	robust_widths : np.ndarray
 		Median peak widths (from `find_robust_peaks`) for each robust peak.
 		Entries are NaN where no width estimate was available in the cluster.
+		Peaks whose width interval contains fewer than five finite light-curve
+		data points are excluded.
 	"""
 	if merge_window is None:
 		merge_window = max(scales)
 
-	dx = np.median(np.diff(np.sort(x)))
+	x = np.asarray(x)
+	y = np.asarray(y)
 
 	all_peak_times = []
 	for scale in scales:
@@ -2103,7 +2110,55 @@ def multiscale_peaks(x, y, scales=[0.1, 0.5, 2, 5, 15], min_scales=2,
 				cluster_widths.append(w_p[closest_in_tp])
 
 		if n_scales_present >= min_scales:
-			robust_peaks.append(np.median(times_in_cluster))
-			robust_widths.append(np.median(cluster_widths) if cluster_widths else np.nan)
+			t_peak = np.median(times_in_cluster)
+			width = np.median(cluster_widths) if cluster_widths else np.nan
 
-	return np.array((robust_peaks)), np.array(robust_widths)
+			if not np.isfinite(width):
+				continue
+
+			in_peak_interval = (
+				(x >= t_peak - width / 2)
+				& (x <= t_peak + width / 2)
+				& np.isfinite(x)
+				& np.isfinite(y)
+			)
+			if np.count_nonzero(in_peak_interval) < 5:
+				continue
+
+			robust_peaks.append(t_peak)
+			robust_widths.append(width)
+
+	if len(robust_peaks) > 1:
+		robust_peaks = np.asarray(robust_peaks)
+		robust_widths = np.asarray(robust_widths)
+
+		# Rank candidates by the observed value nearest their peak time. Greedily
+		# retain the strongest candidates while enforcing the minimum separation.
+		finite_data_indices = np.flatnonzero(np.isfinite(x) & np.isfinite(y))
+		nearest_indices = np.array([
+			finite_data_indices[
+				np.argmin(np.abs(x[finite_data_indices] - t_peak))
+			]
+			for t_peak in robust_peaks
+		])
+		peak_values = y[nearest_indices]
+		ranked_candidates = np.argsort(
+			np.nan_to_num(peak_values, nan=-np.inf)
+		)[::-1]
+
+		selected = []
+		for candidate in ranked_candidates:
+			if all(
+				abs(robust_peaks[candidate] - robust_peaks[kept])
+				>= min_peak_separation
+				for kept in selected
+			):
+				selected.append(candidate)
+
+		selected = np.array(
+			sorted(selected, key=lambda i: robust_peaks[i]), dtype=int
+		)
+		robust_peaks = robust_peaks[selected]
+		robust_widths = robust_widths[selected]
+
+	return np.asarray(robust_peaks), np.asarray(robust_widths)
